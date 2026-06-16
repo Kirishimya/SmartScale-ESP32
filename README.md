@@ -1,6 +1,6 @@
 # SmartScale-ESP32
 
-Compact PlatformIO/Arduino project for a digital scale using an HX711 load-cell amplifier and an ESP32 (Seeed XIAO ESP32-C3).
+Compact PlatformIO/Arduino project for a digital scale using an HX711 load-cell amplifier and an ESP32-C3
 
 **Features**
 - Uses `HX711_ADC` library for HX711 integration.
