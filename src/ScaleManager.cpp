@@ -1,17 +1,28 @@
 #include "ScaleManager.h"
 #include "Calibration.h"
 #include "BLEStream.h"
+#include "PartCounter.h"
+#include <math.h>
+#if defined(ESP8266) || defined(ESP32)
+#include <EEPROM.h>
+#endif
 
 constexpr unsigned long kSerialPrintInterval = 1000;
+constexpr float kAutoZeroThreshold = 0.01f;
+constexpr unsigned long kAutoZeroStableTime = 1500;
+constexpr unsigned long kAutoZeroCooldown = 5000;
 
 ScaleManager::ScaleManager(int dout, int sck, int eepromAddress)
     : _loadCell(dout, sck), _bluetoothStream(nullptr), _lastPrint(0),
-      _lastNoDataPrint(0), _newDataReady(false), _eepromAddress(eepromAddress) {
+      _lastNoDataPrint(0), _newDataReady(false), _eepromAddress(eepromAddress),
+      _lastAutoZero(0), _autoZeroStableStart(0), _autoZeroPending(false) {
   _calibration = new Calibration(_loadCell, _eepromAddress);
+  _partCounter = new PartCounter(_loadCell, _eepromAddress);
 }
 
 void ScaleManager::begin() {
   Serial.begin(115200);
+  _partCounter->loadSavedPieceWeight();
   delay(10);
 
 #if defined(ESP32)
@@ -83,11 +94,14 @@ void ScaleManager::update() {
 }
 
 void ScaleManager::process() {
-  if (_newDataReady && millis() > _lastPrint + kSerialPrintInterval) {
-    printWeight();
-    _newDataReady = false;
-    _lastPrint = millis();
-    _lastNoDataPrint = millis();
+  if (_newDataReady) {
+    maybeAutoZero();
+    if (millis() > _lastPrint + kSerialPrintInterval) {
+      printWeight();
+      _newDataReady = false;
+      _lastPrint = millis();
+      _lastNoDataPrint = millis();
+    }
   }
 
   if (!_newDataReady && millis() > _lastNoDataPrint + 5000) {
@@ -109,10 +123,37 @@ void ScaleManager::process() {
   }
 }
 
+void ScaleManager::maybeAutoZero() {
+  if (_loadCell.getTareStatus()) {
+    _autoZeroPending = false;
+    return;
+  }
+
+  const float weight = _loadCell.getData();
+  const bool nearZero = fabsf(weight) < kAutoZeroThreshold;
+
+  if (nearZero) {
+    if (!_autoZeroPending) {
+      _autoZeroPending = true;
+      _autoZeroStableStart = millis();
+    } else if (millis() - _autoZeroStableStart >= kAutoZeroStableTime &&
+               millis() - _lastAutoZero >= kAutoZeroCooldown) {
+      _loadCell.tareNoDelay();
+      _lastAutoZero = millis();
+      _autoZeroPending = false;
+      Serial.println("Auto-zero triggered");
+    }
+  } else {
+    _autoZeroPending = false;
+  }
+}
+
 void ScaleManager::printWeight() {
   float weight = _loadCell.getData();
   float cal = _loadCell.getCalFactor();
   bool tare = _loadCell.getTareStatus();
+  int estimatedParts = _partCounter->estimateParts(weight);
+  bool hasPieceWeight = _partCounter->hasAvgPieceWeight();
 
   // Serial diagnostic output
   Serial.print("Raw: ");
@@ -120,6 +161,12 @@ void ScaleManager::printWeight() {
   Serial.print(" | Weight: ");
   Serial.print(weight, 3);
   Serial.print(" kg");
+  Serial.print(" | Parts: ");
+  if (hasPieceWeight) {
+    Serial.print(estimatedParts);
+  } else {
+    Serial.print("n/a");
+  }
   Serial.print(" | Cal: ");
   Serial.print(cal);
   Serial.print(" | Tare: ");
@@ -127,17 +174,27 @@ void ScaleManager::printWeight() {
   Serial.print(" | millis: ");
   Serial.println(millis());
 
-  // Bluetooth/stream output (if available)
+  // Bluetooth/stream JSON output (if available)
   if (_bluetoothStream) {
-    _bluetoothStream->print("Weight: ");
-    _bluetoothStream->print(weight);
-    _bluetoothStream->print(" kg");
-    _bluetoothStream->print(" | Cal: ");
-    _bluetoothStream->print(cal);
-    _bluetoothStream->print(" | Tare: ");
-    _bluetoothStream->print(tare ? 1 : 0);
-    _bluetoothStream->print(" | millis: ");
-    _bluetoothStream->println(millis());
+    _bluetoothStream->print("{\"weight\":");
+    _bluetoothStream->print(weight, 3);
+    _bluetoothStream->print(",\"estimated_parts\":");
+    if (hasPieceWeight) {
+      _bluetoothStream->print(estimatedParts);
+    } else {
+      _bluetoothStream->print("null");
+    }
+    _bluetoothStream->print(",\"avg_piece_weight\":");
+    if (hasPieceWeight) {
+      _bluetoothStream->print(_partCounter->getAvgPieceWeight(), 6);
+    } else {
+      _bluetoothStream->print("null");
+    }
+    _bluetoothStream->print(",\"tare\":");
+    _bluetoothStream->print(tare ? "true" : "false");
+    _bluetoothStream->print(",\"millis\":");
+    _bluetoothStream->print(millis());
+    _bluetoothStream->println("}");
   }
 }
 
@@ -150,9 +207,17 @@ void ScaleManager::handleStream(Stream &port) {
       _calibration->calibrate(port);
     } else if (inByte == 'c') {
       _calibration->changeSavedCalFactor(port);
+    } else if (inByte == 'm') {
+      // start interactive sampling to compute avg piece weight
+      _partCounter->startSample(port);
+    } else if (inByte == 'b') {
+      _partCounter->startBatch(port);
+    } else if (inByte == 'e') {
+      _partCounter->endBatch(port);
     }
   }
 }
+
 
 void ScaleManager::printTareStatus() {
   Serial.println("Tare complete");

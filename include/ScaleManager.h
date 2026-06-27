@@ -13,6 +13,7 @@ public:
 
 private:
   void initializeBluetooth();
+  void maybeAutoZero();
   void printWeight();
   void handleStream(Stream &port);
   void handleCommands(Stream &port);
@@ -20,11 +21,15 @@ private:
 
   HX711_ADC _loadCell;
   class Calibration *_calibration;
+  class PartCounter *_partCounter;
   Stream *_bluetoothStream;
   unsigned long _lastPrint;
   unsigned long _lastNoDataPrint;
   bool _newDataReady;
   int _eepromAddress;
+  unsigned long _lastAutoZero;
+  unsigned long _autoZeroStableStart;
+  bool _autoZeroPending;
 };
 
 #endif // SCALEMANAGER_H

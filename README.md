@@ -7,6 +7,9 @@ Compact PlatformIO/Arduino project for a digital scale using an HX711 load-cell 
 - Calibration and calibration factor saved to EEPROM.
 - Tare and calibration via serial terminal commands (`t`, `r`, `c`).
 - Optional BLE output for connected clients (ESP32 BLE implementation).
+- Real-time BLE JSON stream with weight and estimated piece count.
+ - Average piece weight sampling and storage to EEPROM.
+ - Batch start/end commands to estimate piece counts from net weight.
 
 **Files of interest**
 - [src/main.cpp](src/main.cpp) — program entry and pin configuration.
@@ -40,8 +43,15 @@ Calibration & Tare
 - To manually change the saved calibration factor: send `c` and type the new value.
 - Calibration factor is saved at EEPROM address `0` by default (see [include/Calibration.h](include/Calibration.h)).
 
+Piece weight sampling & batch counting
+- To sample average piece weight: send `m` and follow prompts. Place a known number of parts on the scale and send the count; the computed average piece weight can be saved to EEPROM.
+- To start a batch: send `b` (this tares the scale and marks batch start).
+- To end a batch and get an estimate: send `e`. The firmware will report net weight and estimated piece count (if average piece weight is set).
+- Average piece weight is saved at EEPROM address `sizeof(float)` (immediately after the calibration float at address 0).
+
 BLE
 - BLE is enabled on ESP32 builds. The BLE device name is set in [include/BLEStream.h](include/BLEStream.h) (`ESP32C3_Scale` by default).
+- BLE output sends a JSON object on each update with fields `weight`, `estimated_parts`, `avg_piece_weight`, `tare`, and `millis`.
 
 Troubleshooting
 - If weight reads a large non-zero value after reboot: the calibration factor may be loaded but the tare offset is not persisted. Either tare after power-up (send `t`), or consider enabling persistent tare in code.
