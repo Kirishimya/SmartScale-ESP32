@@ -58,6 +58,15 @@ Troubleshooting
 - If HX711 doesn't respond, check DOUT/SCK wiring and power to the load cell.
 - If calibration factor is negative, verify load cell wiring polarity and that the known mass used for calibration was appropriate.
 
+Testing
+- Run the host-side test suite with:
+
+```bash
+./test/run_tests.sh
+```
+
+- The suite covers serializer unit tests, packet round-trip integration checks, and a smoke test entry point documented in [test/README](test/README).
+
 Contributing
 - Improvements, translations, and documentation fixes are welcome. Open an issue or PR.
 

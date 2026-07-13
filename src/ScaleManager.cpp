@@ -1,6 +1,6 @@
 #include "ScaleManager.h"
 #include "Calibration.h"
-#include "BLEStream.h"
+#include <drivers/BLE/BLEStream.h>
 #include "PartCounter.h"
 #include <math.h>
 #if defined(ESP8266) || defined(ESP32)
@@ -121,6 +121,18 @@ void ScaleManager::process() {
   if (_loadCell.getTareStatus() == true) {
     printTareStatus();
   }
+}
+
+float ScaleManager::currentWeight() {
+  return _loadCell.getData();
+}
+
+float ScaleManager::averagePieceWeight() const {
+  return _partCounter->getAvgPieceWeight();
+}
+
+float ScaleManager::estimatedParts() {
+  return static_cast<float>(_partCounter->estimateParts(_loadCell.getData()));
 }
 
 void ScaleManager::maybeAutoZero() {

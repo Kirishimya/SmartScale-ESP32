@@ -1,4 +1,4 @@
-#include "BLEStream.h"
+#include <drivers/BLE/BLEStream.h>
 
 #if defined(ESP32) && (defined(ESP32C3) || defined(ESP32_C3) || defined(CONFIG_IDF_TARGET_ESP32C3))
 #include <BLE2902.h>

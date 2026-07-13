@@ -1,0 +1,29 @@
+#ifndef RUNTIME_CONFIG_H
+#define RUNTIME_CONFIG_H
+
+#include <cstdint>
+
+#include <services/Logger.h>
+
+struct RuntimeConfigData {
+  uint32_t controlLoopIntervalMs = 100;
+  uint32_t sensorLoopIntervalMs = 20;
+  uint32_t watchdogLoopIntervalMs = 1000;
+  uint32_t watchdogTimeoutMs = 8000;
+  bool restartOnWatchdogFailure = true;
+  LogLevel logLevel = LogLevel::Info;
+  int hx711DoutPin = 6;
+  int hx711SckPin = 5;
+  int calibrationEepromAddress = 0;
+};
+
+class RuntimeConfig {
+public:
+  bool begin(const char *storageNamespace = "runtime");
+  const RuntimeConfigData &data() const;
+
+private:
+  RuntimeConfigData _data;
+};
+
+#endif // RUNTIME_CONFIG_H

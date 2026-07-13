@@ -10,6 +10,9 @@ public:
   void begin();
   void update();
   void process();
+  float currentWeight();
+  float averagePieceWeight() const;
+  float estimatedParts();
 
 private:
   void initializeBluetooth();
