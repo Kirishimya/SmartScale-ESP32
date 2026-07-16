@@ -1,7 +1,7 @@
 # Architecture Review and Remaining Work
 
 ## Overall assessment
-The firmware now has the P0 foundation, P1 network/protocol hardening, P2 embedded runtime/features, and P3 operational OTA/gateway/balanca hardening implemented. It can build separate slave and master firmware images using OTA-capable partitions. Remaining work is now mostly P4: automated tests, CI, deeper documentation, and production provisioning tools.
+The firmware now has the P0 foundation, P1 network/protocol hardening, P2 embedded runtime/features, P3 operational OTA/gateway/balanca hardening, and P4 quality/documentation coverage implemented. It can build separate slave and master firmware images using OTA-capable partitions. Remaining future work is now production provisioning, hardware-in-the-loop validation, and field tuning.
 
 ## What is already in place
 - Modular directory structure for core, network, slave, master, models, and utils.
@@ -20,6 +20,7 @@ The firmware now has the P0 foundation, P1 network/protocol hardening, P2 embedd
 - Flash-backed gateway buffer and JSONL gateway contract in [src/services/GatewayManager.cpp](../src/services/GatewayManager.cpp).
 - Non-blocking HX711 startup failure handling, safer runtime commands, owned calibration/counting helpers, and BLE reconnection/fragmentation hardening in [src/ScaleManager.cpp](../src/ScaleManager.cpp) and [src/drivers/BLE/BLEStream.cpp](../src/drivers/BLE/BLEStream.cpp).
 - A working host-side test harness in [test/run_tests.sh](../test/run_tests.sh).
+- CI workflow for host tests and both PlatformIO firmware builds in [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 - A successful PlatformIO build for the ESP32-C3 target.
 
 ## Major gaps versus the prompt
@@ -29,7 +30,7 @@ The firmware now has the P0 foundation, P1 network/protocol hardening, P2 embedd
 - Protocol version checks, sequence checks, CRC validation, replay filtering, radio-MAC/envelope matching, portable schemas, and optional ESP-NOW key configuration are implemented. Provisioning UI/tools for production keys are still pending.
 - Logging, configuration, watchdog, command handling, and health reporting have production-oriented foundations.
 - The architecture has a basic FreeRTOS split for control/network, sensor, and watchdog work; gateway records are retained in flash as JSONL for a Raspberry/gateway process to drain.
-- Doxygen documentation and full multi-node communication tests are still incomplete.
+- Hardware-in-the-loop multi-node testing and production provisioning tools are still future work.
 
 ## Priority backlog
 ### P0 - Stability and correctness
@@ -63,9 +64,10 @@ The firmware now has the P0 foundation, P1 network/protocol hardening, P2 embedd
 - [x] Harden HX711 startup, ownership, runtime command behavior, and BLE reconnect/fragmentation.
 
 ### P4 - Testing and documentation
-- [ ] Expand host-side tests for state transitions, network-table behavior, and packet security rules.
-- [ ] Add integration tests for multi-node discovery, polling, and heartbeats.
-- [ ] Add Doxygen-style documentation and architecture diagrams.
+- [x] Expand host-side tests for state transitions, network-table behavior, packet security rules, payload schemas, queues, gateway records, and network filtering.
+- [x] Add integration tests for master/slave discovery flow with a fake ESP-NOW driver.
+- [x] Add Doxygen-style comments for key payload/gateway APIs and update architecture/protocol documentation.
+- [x] Add CI workflow for host tests and PlatformIO firmware builds.
 
 ## Suggested implementation order
 1. Finish the slave and master runtime behavior with real state transitions.
@@ -81,4 +83,4 @@ The firmware now has the P0 foundation, P1 network/protocol hardening, P2 embedd
 - [x] Create a central configuration manager, logger, and watchdog.
 - [x] Finish P1/P2 protocol schemas, config hooks, commands, diagnostics, time sync, and OTA transfer protocol.
 - [x] Evolve OTA and gateway integration.
-- [ ] Expand tests and documentation coverage.
+- [x] Expand tests and documentation coverage.

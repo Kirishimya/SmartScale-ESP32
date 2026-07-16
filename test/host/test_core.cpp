@@ -1,15 +1,20 @@
 #include <application/ISlaveController.h>
+#include <application/MasterController.h>
 #include <application/slave/StateFactory.h>
 #include <application/slave/StateMachine.h>
+#include <drivers/EspNowDriver.h>
 #include <models/NetworkTable.h>
 #include <models/Payloads.h>
+#include <network/NetworkManager.h>
 #include <network/protocol/ProtocolValidator.h>
 #include <network/protocol/Serializer.h>
 #include <services/GatewayManager.h>
 #include <storage/FlashQueue.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -165,6 +170,116 @@ public:
   int samples = 0;
 };
 
+class FakeDriver : public IEspNowDriver {
+public:
+  struct SentFrame {
+    std::vector<uint8_t> bytes;
+    std::array<uint8_t, 6> destination{};
+  };
+
+  void configure(const EspNowConfig &config) override { this->config = config; }
+  bool begin() override { return true; }
+  bool send(const uint8_t *data, size_t len, const uint8_t mac[6]) override {
+    require(data != nullptr, "driver send data not null");
+    require(mac != nullptr, "driver send mac not null");
+    SentFrame frame;
+    frame.bytes.assign(data, data + len);
+    std::copy(mac, mac + 6, frame.destination.begin());
+    sent.push_back(frame);
+    if (tx) tx(mac, true);
+    return true;
+  }
+  bool localMac(uint8_t mac[6]) const override {
+    std::copy(local.begin(), local.end(), mac);
+    return true;
+  }
+  void onReceive(RxCallback cb) override { rx = cb; }
+  void onSend(TxCallback cb) override { tx = cb; }
+
+  void inject(const Packet &packet, const std::array<uint8_t, 6> &sender) {
+    auto bytes = Serializer::serialize(packet);
+    require(!bytes.empty(), "injected packet serializes");
+    require(static_cast<bool>(rx), "rx callback registered");
+    rx(bytes.data(), bytes.size(), sender.data());
+  }
+
+  EspNowConfig config;
+  std::array<uint8_t, 6> local{0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+  std::vector<SentFrame> sent;
+  RxCallback rx;
+  TxCallback tx;
+};
+
+void testNetworkManagerFiltering() {
+  FakeDriver driver;
+  NetworkManager network(driver, 1);
+  require(network.begin(), "network begins");
+
+  std::array<uint8_t, 6> peer{0x02, 0x00, 0x00, 0x00, 0x00, 0x02};
+  int received = 0;
+  network.setPacketHandler([&](const Packet &, const NetworkManager::MacAddress &) {
+    ++received;
+  });
+
+  Packet valid = validPacket(PacketType::HEARTBEAT);
+  valid.src_mac = peer;
+  valid.dst_mac = driver.local;
+  valid.seq = 1;
+  driver.inject(valid, peer);
+  network.poll();
+  require(received == 1, "valid incoming packet dispatched");
+
+  driver.inject(valid, peer);
+  network.poll();
+  require(received == 1, "duplicate sequence rejected");
+
+  Packet wrongDestination = valid;
+  wrongDestination.seq = 2;
+  wrongDestination.dst_mac = {9, 9, 9, 9, 9, 9};
+  driver.inject(wrongDestination, peer);
+  network.poll();
+  require(received == 1, "wrong destination rejected");
+
+  Packet forged = valid;
+  forged.seq = 3;
+  forged.src_mac = {8, 8, 8, 8, 8, 8};
+  driver.inject(forged, peer);
+  network.poll();
+  require(received == 1, "forged envelope mac rejected");
+}
+
+void testMasterJoinIntegration() {
+  FakeDriver driver;
+  MasterController master(driver);
+  require(master.begin(), "master begins");
+
+  std::array<uint8_t, 6> slaveMac{0x02, 0x00, 0x00, 0x00, 0x00, 0x09};
+  Packet join;
+  join.version = Packet::kProtocolVersion;
+  join.type = PacketType::JOIN_REQUEST;
+  join.src_mac = slaveMac;
+  join.dst_mac = NetworkManager::broadcastMac();
+  join.src_id = 0;
+  join.dst_id = 0;
+  join.seq = 1;
+  join.ts = 1000;
+  join.payload = {0x01};
+
+  driver.inject(join, slaveMac);
+  master.loop();
+  require(master.networkTable().findByMac(slaveMac).has_value(), "master registers joining node");
+  require(driver.sent.size() >= 2, "master sends join accept and time sync");
+
+  auto accepted = Serializer::parse(driver.sent[0].bytes.data(), driver.sent[0].bytes.size());
+  auto timeSync = Serializer::parse(driver.sent[1].bytes.data(), driver.sent[1].bytes.size());
+  require(accepted.has_value(), "join accept parses");
+  require(timeSync.has_value(), "time sync parses");
+  require(accepted->type == PacketType::JOIN_ACCEPT, "first response is join accept");
+  require(timeSync->type == PacketType::TIME_SYNC, "second response is time sync");
+  Payloads::TimeSync decoded;
+  require(Payloads::decodeTimeSync(timeSync->payload, decoded), "time sync payload decodes");
+}
+
 void testStateMachine() {
   FakeController ctrl;
   StateMachine sm(ctrl);
@@ -190,6 +305,8 @@ int main() {
   testFlashQueue();
   testNetworkTable();
   testGatewayManager();
+  testNetworkManagerFiltering();
+  testMasterJoinIntegration();
   testStateMachine();
   std::cout << "All host tests passed" << std::endl;
   return 0;

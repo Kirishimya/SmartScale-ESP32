@@ -44,40 +44,66 @@ After building the envelope and CRC, the packet will be encrypted/authorized usi
 
 ## Validation and security
 - Validate `version` first.
-- Check `payload_len` <= allowed maximum (e.g., 1024 bytes).
+- Check `payload_len` <= `Packet::kMaxPayloadSize` (currently 200 bytes to keep the full ESP-NOW frame under 250 bytes).
 - Compute CRC32 and compare before decrypting payload (if unencrypted header), or decrypt then validate.
-- Maintain per-peer sequence windows to prevent replay (store last N sequence numbers).
-- Use ESP-NOW AES keys (driver) and per-network key rotation handled by Master.
+- Maintain per-peer sequence state to prevent replay.
+- Match the radio-level sender MAC with the protocol envelope source MAC.
+- Use ESP-NOW AES keys when provisioned through runtime config. Empty keys disable encryption.
 
-## SENSOR_DATA payload (example schema)
-- Payload format is TLV or compact binary. Example JSON-like fields for readability; implementation recommended as compact binary TLV.
-- Example JSON (human-readable):
-  {
-    "sensor_type": "hx711",
-    "samples": 1,
-    "weight_kg": 0.1234,
-    "cal": 696.0,
-    "status": 0
-  }
+## Payload schemas
 
-In production, implement compact TLV: [tag(uint8), len(uint8), value(bytes)] for each field.
+All multi-byte payload fields are big-endian. Payload schema helpers live in [include/models/Payloads.h](../include/models/Payloads.h).
+
+### SENSOR_DATA
+- `schema_version` uint8, currently `1`
+- `flags` uint8, currently `0`
+- `weight_mg` int32
+- `unit_weight_mg` int32
+- `estimated_units_milli` uint32
+- `sample_time_ms` uint64
+
+### ACK / NACK
+- `acked_seq` uint32
+- NACK may append UTF-8 diagnostic text after the first 4 bytes.
+
+### TIME_SYNC
+- `schema_version` uint8, currently `1`
+- `epoch_ms` uint64
+- `monotonic_ms` uint64
+
+### COMMAND
+- `command_id` uint8
+- Current commands:
+  - `1` Tare
+  - `2` Reboot
+  - `3` SendDiagnostic
+  - `4` Rediscover
+
+### CONFIG
+- `config_id` uint8
+- `value` uint32
+- Current configs:
+  - `1` heartbeat interval in milliseconds
+  - `2` master node ID
 
 ## ACK / Retransmit
-- ACK contains the `seq` of the packet being acknowledged (payload contains seq as 4 bytes).
-- Retransmit policy: Master retries up to N times with exponential backoff; on failure, store the packet in FlashQueue and move on.
+- ACK contains the `seq` of the packet being acknowledged.
+- Slave sensor data is retained in FlashQueue until the matching ACK arrives.
+- Master OTA uses stop-and-wait with bounded retry and NACK handling.
 
 ## TimeSync
-- Master periodically sends TIME_SYNC (type 0x0E) with `ts` = epoch ms. Slave calculates offset using request/response RTT.
+- Master sends TIME_SYNC with `epoch_ms` and `monotonic_ms`. Slave calculates a local offset and stamps outgoing sensor samples with adjusted time.
 
 ## OTA packets
-- OTA_BEGIN: contains metadata (firmware version, size, block_size, checksum)
-- OTA_DATA: fields: block_index(uint32), data(bytes)
-- OTA_END: checksum and install command
+- `OTA_BEGIN`: `schema_version` uint8, `image_size` uint32, `fnv1a_checksum` uint32
+- `OTA_DATA`: `schema_version` uint8, `offset` uint32, `data` bytes
+- `OTA_END`: `schema_version` uint8, `image_size` uint32, `fnv1a_checksum` uint32
+- The slave writes OTA data through Arduino `Update`, verifies checksum, ACKs, and reboots.
 
 ## Examples
 - Discovery (broadcast): version=1, type=DISCOVERY, src_mac=<slave>, dst_mac=FF..FF, payload={capabilities,fw}
-- Poll (master→slave): type=COMMAND or POLL (use COMMAND with sub-type POLL) with empty payload
-- Sensor data (slave→master): type=SENSOR_DATA, payload=TLV encoded sample
+- Poll (master→slave): type=PING
+- Sensor data (slave→master): type=SENSOR_DATA, payload=schema above
 
 ## Serialization notes
 - Provide serializer/ deserializer utility with unit tests.

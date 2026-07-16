@@ -1,0 +1,27 @@
+name: firmware-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run host tests
+        run: bash test/run_tests.sh
+
+  platformio-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build slave firmware
+        run: pio run -e seeed_xiao_esp32c3
+      - name: Build master firmware
+        run: pio run -e seeed_xiao_esp32c3_master

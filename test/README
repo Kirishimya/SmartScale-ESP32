@@ -1,20 +1,30 @@
 # Tests
 
-This project includes a small host-side test suite that validates the packet serializer and a basic transport-style round-trip flow without requiring hardware.
+The host test suite compiles without Arduino hardware and validates the firmware's portable core.
 
-## Test categories
-- Unit tests: serializer round-trip and CRC rejection in [test/test_serializer/test_serializer.cpp](test/test_serializer/test_serializer.cpp)
-- Integration tests: packet serialization/parsing through a fake transport in [test/integration/test_transport.cpp](test/integration/test_transport.cpp)
-- System smoke test: [test/run_tests.sh](test/run_tests.sh)
+## Coverage
+- Packet serializer round-trip, CRC rejection, invalid enum rejection, null input, payload limits, and trailing-byte rejection.
+- Portable payload schemas for sensor data, ACK, and time sync.
+- Protocol validation and sequence/replay helper behavior.
+- FlashQueue retry/backoff and ACK removal behavior in host mode.
+- NetworkTable liveness, failure counters, and stale-node marking.
+- Gateway JSONL record generation and flash-backed queue plumbing.
+- NetworkManager filtering for destination, replay, and forged MAC envelopes.
+- Master join integration with fake ESP-NOW driver, including JOIN_ACCEPT and TIME_SYNC responses.
+- Slave state-machine smoke flow through BOOT, INIT, DISCOVERY, and WAIT_JOIN.
 
-## Run the tests
+## Run
 From the project root:
 
 ```bash
-./test/run_tests.sh
+bash test/run_tests.sh
 ```
 
-The script compiles and runs both test binaries with the host C++ toolchain.
+The script builds `build/tests/test_core` with the host C++ toolchain and runs it.
 
-More information about PlatformIO Unit Testing:
-- https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+Firmware builds are still validated separately with:
+
+```bash
+pio run -e seeed_xiao_esp32c3
+pio run -e seeed_xiao_esp32c3_master
+```
