@@ -1,7 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <models/Packet.h>
-#include <utils/Serializer.h>
+#include <network/protocol/Serializer.h>
 
 int main() {
   Packet p;

@@ -2,7 +2,7 @@
 #include <iostream>
 #include <vector>
 
-#include <slave/FlashQueue.h>
+#include <storage/FlashQueue.h>
 
 int main() {
   FlashQueue queue(4);

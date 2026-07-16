@@ -3,9 +3,9 @@
 #include <memory>
 #include <string>
 
-#include <slave/StateFactory.h>
-#include <slave/StateMachine.h>
-#include <slave/ISlaveController.h>
+#include <application/slave/StateFactory.h>
+#include <application/slave/StateMachine.h>
+#include <application/ISlaveController.h>
 
 class FakeController : public ISlaveController {
 public:
@@ -15,6 +15,7 @@ public:
   void persistNodeId(uint16_t) override {}
   void log(const std::string &) override {}
   void requestStateTransition(const std::string &) override {}
+  void sendSensorSample() override {}
 };
 
 int main() {
