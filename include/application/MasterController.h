@@ -10,6 +10,7 @@
 #include <network/PollingManager.h>
 #include <network/OTAManager.h>
 #include <services/DiagnosticManager.h>
+#include <services/GatewayManager.h>
 #include <application/Controller.h>
 
 class MasterController: public Controller {
@@ -23,6 +24,7 @@ public:
   PollingManager &poller() { return _poller; }
   OTAManager &ota() { return _ota; }
   DiagnosticManager &diagnostics() { return _diagnostics; }
+  GatewayManager &gateway() { return _gateway; }
 private:
   IEspNowDriver &_driver;
   NetworkManager _network;
@@ -30,6 +32,7 @@ private:
   PollingManager _poller;
   OTAManager _ota;
   DiagnosticManager _diagnostics;
+  GatewayManager _gateway;
   OnNodeDiscovered _onNodeDiscovered;
   uint32_t _lastPoll;
   uint32_t _lastWatchdog;

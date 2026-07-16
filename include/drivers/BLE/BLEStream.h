@@ -42,9 +42,9 @@ public:
 private:
   static constexpr size_t kRxBufferSize = 256;
   uint8_t _rxBuffer[kRxBufferSize];
-  size_t _rxHead;
-  size_t _rxTail;
-  bool _connected;
+  volatile size_t _rxHead;
+  volatile size_t _rxTail;
+  volatile bool _connected;
   BLECharacteristic *_txCharacteristic;
   BLEStreamCallbacks _callbacks;
 };

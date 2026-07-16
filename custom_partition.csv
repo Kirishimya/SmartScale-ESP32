@@ -1,3 +1,7 @@
 # Name, Type, SubType, Offset, Size
-nvs, data, nvs, 0x1f000, 124K
-fs_storage, data, 0xff, 0x47000, 100K
+nvs, data, nvs, 0x9000, 0x16000
+otadata, data, ota, 0x1F000, 0x2000
+phy_init, data, phy, 0x21000, 0x1000
+ota_0, app, ota_0, 0x30000, 0x1C0000
+ota_1, app, ota_1, 0x1F0000, 0x1C0000
+fs_storage, data, 0xff, 0x3B0000, 0x50000

@@ -41,10 +41,28 @@ private:
   uint32_t _heartbeatInterval;
   uint16_t _nodeId;
   uint64_t _lastUpdate;
+  int64_t _timeOffsetMs = 0;
   std::optional<NetworkManager::MacAddress> _masterMac;
   uint16_t _masterId;
+  struct OtaSession {
+    bool active = false;
+    bool installReady = false;
+    uint32_t expectedSize = 0;
+    uint32_t expectedChecksum = 0;
+    uint32_t received = 0;
+    uint32_t checksum = 2166136261UL;
+  } _ota;
   void handlePacket(const Packet &packet, const NetworkManager::MacAddress &mac);
   std::optional<NetworkManager::MacAddress> destinationFor(const Packet &packet) const;
+  void handleCommand(const Packet &packet);
+  void handleConfig(const Packet &packet);
+  void handleOta(const Packet &packet);
+  bool beginOtaInstall(uint32_t size);
+  bool writeOtaChunk(const std::vector<uint8_t> &chunk);
+  bool endOtaInstall();
+  void abortOtaInstall();
+  void sendAck(uint32_t sequence);
+  void sendNack(uint32_t sequence, const std::string &reason);
 };
 
 #endif // SLAVECONTROLLER_H

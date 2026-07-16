@@ -3,6 +3,7 @@
 #include <drivers/BLE/BLEStream.h>
 #include "PartCounter.h"
 #include <math.h>
+#include <memory>
 #if defined(ESP8266) || defined(ESP32)
 #include <EEPROM.h>
 #endif
@@ -15,9 +16,10 @@ constexpr unsigned long kAutoZeroCooldown = 5000;
 ScaleManager::ScaleManager(int dout, int sck, int eepromAddress)
     : _loadCell(dout, sck), _bluetoothStream(nullptr), _lastPrint(0),
       _lastNoDataPrint(0), _newDataReady(false), _eepromAddress(eepromAddress),
-      _lastAutoZero(0), _autoZeroStableStart(0), _autoZeroPending(false) {
-  _calibration = new Calibration(_loadCell, _eepromAddress);
-  _partCounter = new PartCounter(_loadCell, _eepromAddress);
+      _lastAutoZero(0), _autoZeroStableStart(0), _autoZeroPending(false),
+      _sensorReady(false) {
+  _calibration = std::make_unique<Calibration>(_loadCell, _eepromAddress);
+  _partCounter = std::make_unique<PartCounter>(_loadCell, _eepromAddress);
 }
 
 void ScaleManager::begin() {
@@ -38,10 +40,20 @@ void ScaleManager::begin() {
   const bool tareAfterStart = true;
   _loadCell.start(stabilizingTime, tareAfterStart);
 
-  while (_loadCell.getTareTimeoutFlag() || _loadCell.getSignalTimeoutFlag()) {
+  constexpr uint8_t kMaxStartAttempts = 3;
+  uint8_t attempts = 0;
+  while ((_loadCell.getTareTimeoutFlag() || _loadCell.getSignalTimeoutFlag()) &&
+         attempts < kMaxStartAttempts) {
     Serial.println("Timeout, check MCU>HX711 wiring and pin designations");
-    delay(2000);
+    delay(500);
     _loadCell.start(stabilizingTime, tareAfterStart);
+    ++attempts;
+  }
+
+  if (_loadCell.getTareTimeoutFlag() || _loadCell.getSignalTimeoutFlag()) {
+    Serial.println("ERROR: HX711 startup failed; continuing so network/watchdog can run.");
+    _sensorReady = false;
+    return;
   }
 
   float calValue = _calibration->loadSavedFactor();
@@ -70,6 +82,7 @@ void ScaleManager::begin() {
       break;
     }
   }
+  _sensorReady = !_loadCell.getSignalTimeoutFlag();
 }
 
 void ScaleManager::initializeBluetooth() {
@@ -88,12 +101,29 @@ void ScaleManager::initializeBluetooth() {
 }
 
 void ScaleManager::update() {
+  if (!_sensorReady && _loadCell.getSignalTimeoutFlag()) {
+    return;
+  }
   if (_loadCell.update()) {
     _newDataReady = true;
+    _sensorReady = true;
   }
 }
 
 void ScaleManager::process() {
+  handleCommands(Serial);
+  if (_bluetoothStream && _bluetoothStream->available() > 0) {
+    handleCommands(*_bluetoothStream);
+  }
+
+  if (!_sensorReady) {
+    if (millis() > _lastNoDataPrint + 5000) {
+      Serial.println("HX711 unavailable; runtime remains active.");
+      _lastNoDataPrint = millis();
+    }
+    return;
+  }
+
   if (_newDataReady) {
     maybeAutoZero();
     if (millis() > _lastPrint + kSerialPrintInterval) {
@@ -113,17 +143,13 @@ void ScaleManager::process() {
     _lastNoDataPrint = millis();
   }
 
-  handleStream(Serial);
-  if (_bluetoothStream && _bluetoothStream->available() > 0) {
-    handleStream(*_bluetoothStream);
-  }
-
   if (_loadCell.getTareStatus() == true) {
     printTareStatus();
   }
 }
 
 float ScaleManager::currentWeight() {
+  if (!_sensorReady) return 0.0f;
   return _loadCell.getData();
 }
 
@@ -132,7 +158,12 @@ float ScaleManager::averagePieceWeight() const {
 }
 
 float ScaleManager::estimatedParts() {
+  if (!_sensorReady) return 0.0f;
   return static_cast<float>(_partCounter->estimateParts(_loadCell.getData()));
+}
+
+bool ScaleManager::ready() const {
+  return _sensorReady;
 }
 
 void ScaleManager::maybeAutoZero() {
@@ -230,6 +261,17 @@ void ScaleManager::handleStream(Stream &port) {
   }
 }
 
+void ScaleManager::handleCommands(Stream &port) {
+  while (port.available() > 0) {
+    char inByte = port.read();
+    if (inByte == 't') {
+      _loadCell.tareNoDelay();
+    } else if (inByte == 'r' || inByte == 'c' || inByte == 'm' ||
+               inByte == 'b' || inByte == 'e') {
+      port.println("Interactive calibration/batch commands are disabled in runtime mode.");
+    }
+  }
+}
 
 void ScaleManager::printTareStatus() {
   Serial.println("Tare complete");

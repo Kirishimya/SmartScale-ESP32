@@ -9,6 +9,7 @@
 namespace {
 constexpr uint32_t kRecordMagic = 0x53515458; // "SQTX"
 constexpr size_t kRecordHeaderSize = 16;
+constexpr size_t kMaxStoredItemSize = 2048;
 
 void writeU32(std::vector<uint8_t> &out, uint32_t value) {
   out.push_back(static_cast<uint8_t>(value >> 24));
@@ -42,6 +43,7 @@ bool FlashQueue::push(const std::vector<uint8_t> &item) {
 
 bool FlashQueue::push(const std::vector<uint8_t> &item, const std::array<uint8_t, 6> &destination, uint32_t sequence) {
   if (_buf.size() >= _cap) return false;
+  if (item.size() > kMaxStoredItemSize) return false;
   QueuedPacket packet;
   packet.bytes = item;
   packet.destination = destination;
@@ -160,7 +162,7 @@ bool FlashQueue::restore() {
     char key[8];
     snprintf(key, sizeof(key), "p%u", static_cast<unsigned>(i));
     const size_t size = preferences.getBytesLength(key);
-    if (size < kRecordHeaderSize || size > Packet::kMaxPayloadSize + 36) continue;
+    if (size < kRecordHeaderSize || size > kRecordHeaderSize + kMaxStoredItemSize) continue;
     std::vector<uint8_t> record(size);
     if (preferences.getBytes(key, record.data(), size) != size) continue;
     const uint16_t length = (uint16_t(record[14]) << 8) | record[15];

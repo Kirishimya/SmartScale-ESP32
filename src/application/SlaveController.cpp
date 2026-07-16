@@ -2,8 +2,10 @@
 
 #include <application/slave/State.h>
 #include <application/slave/StateFactory.h>
+#include <models/Payloads.h>
 #include <services/Logger.h>
 
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <chrono>
@@ -11,6 +13,8 @@
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <Preferences.h>
+#include <Update.h>
+#include <esp_system.h>
 
 namespace {
     Preferences preferences;    
@@ -31,6 +35,33 @@ uint64_t hostMillis()
         .count();
 }
 #endif
+
+int32_t kgToMilligrams(float kg)
+{
+    return static_cast<int32_t>(std::lround(kg * 1000000.0f));
+}
+
+uint32_t unitsToMilli(float units)
+{
+    if (units <= 0.0f)
+        return 0;
+    return static_cast<uint32_t>(std::lround(units * 1000.0f));
+}
+
+uint32_t updateFnv1a(uint32_t checksum, const std::vector<uint8_t> &data)
+{
+    for (uint8_t byte : data) {
+        checksum ^= byte;
+        checksum *= 16777619UL;
+    }
+    return checksum;
+}
+
+uint64_t applyOffset(uint64_t monotonicMs, int64_t offsetMs)
+{
+    const int64_t adjusted = static_cast<int64_t>(monotonicMs) + offsetMs;
+    return adjusted > 0 ? static_cast<uint64_t>(adjusted) : monotonicMs;
+}
 
 } // namespace
 
@@ -79,6 +110,8 @@ bool SlaveController::begin()
     #ifdef ARDUINO
     preferences.begin("slave", false);
     _nodeId = preferences.getUShort("node_id", 0);
+    _masterId = preferences.getUShort("master_id", _masterId);
+    _heartbeatInterval = preferences.getUInt("heartbeat_ms", _heartbeatInterval);
     #endif
     _network.setLocalNodeId(_nodeId);
     
@@ -269,23 +302,12 @@ void SlaveController::sendSensorData(
     pkt.src_id = _nodeId;
     pkt.seq = seq;
     pkt.ts = ts;
-
-    pkt.payload.resize(sizeof(float) * 3);
-
-    std::memcpy(
-        pkt.payload.data(),
-        &weight,
-        sizeof(float));
-
-    std::memcpy(
-        pkt.payload.data() + sizeof(float),
-        &weightPerUnit,
-        sizeof(float));
-
-    std::memcpy(
-        pkt.payload.data() + sizeof(float) * 2,
-        &estimatedUnits,
-        sizeof(float));
+    pkt.payload = Payloads::encodeSensorData({
+        kgToMilligrams(weight),
+        kgToMilligrams(weightPerUnit),
+        unitsToMilli(estimatedUnits),
+        applyOffset(ts, _timeOffsetMs)
+    });
 
     sendPacket(pkt);
 }
@@ -328,7 +350,13 @@ void SlaveController::handlePacket(
 
         case PacketType::TIME_SYNC:
         {
-            log("TIME_SYNC received.");
+            Payloads::TimeSync sync;
+            if (Payloads::decodeTimeSync(packet.payload, sync)) {
+                _timeOffsetMs = static_cast<int64_t>(sync.epochMs) - static_cast<int64_t>(nowMillis());
+                log("TIME_SYNC received. Offset=" + std::to_string(_timeOffsetMs) + " ms.");
+            } else {
+                log("TIME_SYNC received without valid payload.");
+            }
 
             requestStateTransition("READY");
 
@@ -337,12 +365,8 @@ void SlaveController::handlePacket(
 
         case PacketType::ACK:
         {
-            if (packet.payload.size() == 4) {
-                const uint32_t acknowledged =
-                    (uint32_t(packet.payload[0]) << 24) |
-                    (uint32_t(packet.payload[1]) << 16) |
-                    (uint32_t(packet.payload[2]) << 8) |
-                    uint32_t(packet.payload[3]);
+            uint32_t acknowledged = 0;
+            if (Payloads::decodeAck(packet.payload, acknowledged)) {
                 if (!_outQueue.markAcked(acknowledged)) {
                     log("ACK received for unknown queued packet.");
                 }
@@ -374,16 +398,14 @@ void SlaveController::handlePacket(
 
         case PacketType::COMMAND:
         {
-            // TODO
-            // Command Dispatcher
+            handleCommand(packet);
 
             break;
         }
 
         case PacketType::CONFIG:
         {
-            // TODO
-            // ConfigManager
+            handleConfig(packet);
 
             break;
         }
@@ -392,8 +414,7 @@ void SlaveController::handlePacket(
         case PacketType::OTA_DATA:
         case PacketType::OTA_END:
         {
-            // TODO
-            // OTA Manager
+            handleOta(packet);
 
             break;
         }
@@ -401,4 +422,233 @@ void SlaveController::handlePacket(
         default:
             break;
     }
+}
+
+void SlaveController::sendAck(uint32_t sequence)
+{
+    Packet ack;
+    ack.type = PacketType::ACK;
+    ack.dst_id = _masterId;
+    ack.payload = Payloads::encodeAck(sequence);
+    sendPacket(ack);
+}
+
+void SlaveController::sendNack(uint32_t sequence, const std::string &reason)
+{
+    Packet nack;
+    nack.type = PacketType::NACK;
+    nack.dst_id = _masterId;
+    nack.payload = Payloads::encodeAck(sequence);
+    const auto text = Payloads::encodeText(reason);
+    nack.payload.insert(nack.payload.end(), text.begin(), text.end());
+    sendPacket(nack);
+}
+
+void SlaveController::handleCommand(const Packet &packet)
+{
+    if (packet.payload.empty()) {
+        sendNack(packet.seq, "empty command");
+        return;
+    }
+
+    const auto command = static_cast<Payloads::CommandId>(packet.payload[0]);
+    switch (command) {
+        case Payloads::CommandId::SendDiagnostic:
+        {
+            Packet diagnostic;
+            diagnostic.type = PacketType::DIAGNOSTIC;
+            diagnostic.dst_id = _masterId;
+            diagnostic.payload = Payloads::encodeText(
+                "uptime_ms=" + std::to_string(nowMillis()) +
+                ";queue=" + std::to_string(_outQueue.size()));
+            sendPacket(diagnostic);
+            sendAck(packet.seq);
+            break;
+        }
+        case Payloads::CommandId::Rediscover:
+            _masterMac.reset();
+            sendAck(packet.seq);
+            requestStateTransition("DISCOVERY");
+            break;
+        case Payloads::CommandId::Reboot:
+            sendAck(packet.seq);
+#ifdef ARDUINO
+            esp_restart();
+#endif
+            break;
+        case Payloads::CommandId::Tare:
+            sendNack(packet.seq, "tare command is not wired to ScaleManager yet");
+            break;
+        default:
+            sendNack(packet.seq, "unknown command");
+            break;
+    }
+}
+
+void SlaveController::handleConfig(const Packet &packet)
+{
+    if (packet.payload.size() < 5) {
+        sendNack(packet.seq, "invalid config payload");
+        return;
+    }
+
+    const auto config = static_cast<Payloads::ConfigId>(packet.payload[0]);
+    uint32_t value = 0;
+    if (!Payloads::readU32(packet.payload, 1, value)) {
+        sendNack(packet.seq, "invalid config value");
+        return;
+    }
+
+    switch (config) {
+        case Payloads::ConfigId::HeartbeatIntervalMs:
+            if (value < 1000 || value > 3600000UL) {
+                sendNack(packet.seq, "heartbeat interval out of range");
+                return;
+            }
+            _heartbeatInterval = value;
+#ifdef ARDUINO
+            preferences.putUInt("heartbeat_ms", _heartbeatInterval);
+#endif
+            sendAck(packet.seq);
+            break;
+        case Payloads::ConfigId::MasterNodeId:
+            if (value == 0 || value > UINT16_MAX) {
+                sendNack(packet.seq, "master id out of range");
+                return;
+            }
+            _masterId = static_cast<uint16_t>(value);
+#ifdef ARDUINO
+            preferences.putUShort("master_id", _masterId);
+#endif
+            sendAck(packet.seq);
+            break;
+        default:
+            sendNack(packet.seq, "unknown config");
+            break;
+    }
+}
+
+void SlaveController::handleOta(const Packet &packet)
+{
+    if (packet.payload.empty() || packet.payload[0] != 1) {
+        sendNack(packet.seq, "invalid ota schema");
+        return;
+    }
+
+    if (packet.type == PacketType::OTA_BEGIN) {
+        uint32_t size = 0;
+        uint32_t checksum = 0;
+        if (!Payloads::readU32(packet.payload, 1, size) ||
+            !Payloads::readU32(packet.payload, 5, checksum) ||
+            size == 0) {
+            sendNack(packet.seq, "invalid ota begin");
+            return;
+        }
+        _ota.active = true;
+        _ota.installReady = beginOtaInstall(size);
+        if (!_ota.installReady) {
+            _ota.active = false;
+            sendNack(packet.seq, "ota install partition unavailable");
+            return;
+        }
+        _ota.expectedSize = size;
+        _ota.expectedChecksum = checksum;
+        _ota.received = 0;
+        _ota.checksum = 2166136261UL;
+        sendAck(packet.seq);
+        return;
+    }
+
+    if (!_ota.active) {
+        sendNack(packet.seq, "ota session not active");
+        return;
+    }
+
+    if (packet.type == PacketType::OTA_DATA) {
+        uint32_t offset = 0;
+        if (!Payloads::readU32(packet.payload, 1, offset) || offset != _ota.received) {
+            sendNack(packet.seq, "ota offset mismatch");
+            return;
+        }
+        std::vector<uint8_t> chunk(packet.payload.begin() + 5, packet.payload.end());
+        if (_ota.received + chunk.size() > _ota.expectedSize) {
+            abortOtaInstall();
+            sendNack(packet.seq, "ota data exceeds expected size");
+            return;
+        }
+        if (!writeOtaChunk(chunk)) {
+            _ota.active = false;
+            sendNack(packet.seq, "ota write failed");
+            return;
+        }
+        _ota.checksum = updateFnv1a(_ota.checksum, chunk);
+        _ota.received += static_cast<uint32_t>(chunk.size());
+        sendAck(packet.seq);
+        return;
+    }
+
+    if (packet.type == PacketType::OTA_END) {
+        uint32_t size = 0;
+        uint32_t checksum = 0;
+        if (!Payloads::readU32(packet.payload, 1, size) ||
+            !Payloads::readU32(packet.payload, 5, checksum) ||
+            size != _ota.received ||
+            checksum != _ota.checksum ||
+            checksum != _ota.expectedChecksum ||
+            !endOtaInstall()) {
+            _ota.active = false;
+            abortOtaInstall();
+            sendNack(packet.seq, "ota verification failed");
+            return;
+        }
+        _ota.active = false;
+        sendAck(packet.seq);
+        log("OTA image installed and verified. Rebooting.");
+#ifdef ARDUINO
+        delay(250);
+        esp_restart();
+#endif
+    }
+}
+
+bool SlaveController::beginOtaInstall(uint32_t size)
+{
+#ifdef ARDUINO
+    if (size == 0) return false;
+    return Update.begin(size, U_FLASH);
+#else
+    (void)size;
+    return true;
+#endif
+}
+
+bool SlaveController::writeOtaChunk(const std::vector<uint8_t> &chunk)
+{
+#ifdef ARDUINO
+    if (chunk.empty()) return true;
+    return Update.write(const_cast<uint8_t *>(chunk.data()), chunk.size()) == chunk.size();
+#else
+    (void)chunk;
+    return true;
+#endif
+}
+
+bool SlaveController::endOtaInstall()
+{
+#ifdef ARDUINO
+    return Update.end(true);
+#else
+    return true;
+#endif
+}
+
+void SlaveController::abortOtaInstall()
+{
+#ifdef ARDUINO
+    if (Update.isRunning()) {
+        Update.abort();
+    }
+#endif
+    _ota.active = false;
+    _ota.installReady = false;
 }

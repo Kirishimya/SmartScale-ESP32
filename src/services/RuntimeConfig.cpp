@@ -1,5 +1,7 @@
 #include <services/RuntimeConfig.h>
 
+#include <algorithm>
+
 #ifdef ARDUINO
 #include <Preferences.h>
 #endif
@@ -47,6 +49,12 @@ constexpr int kDefaultCalibrationAddress = 0;
 constexpr int kDefaultCalibrationAddress = SMARTSCALE_CAL_EEPROM_ADDRESS;
 #endif
 
+#ifndef SMARTSCALE_ESPNOW_CHANNEL
+constexpr uint8_t kDefaultEspNowChannel = 1;
+#else
+constexpr uint8_t kDefaultEspNowChannel = SMARTSCALE_ESPNOW_CHANNEL;
+#endif
+
 LogLevel toLogLevel(uint8_t raw) {
   if (raw > static_cast<uint8_t>(LogLevel::Debug)) return LogLevel::Info;
   return static_cast<LogLevel>(raw);
@@ -61,6 +69,7 @@ bool RuntimeConfig::begin(const char *storageNamespace) {
   _data.hx711DoutPin = kDefaultHx711Dout;
   _data.hx711SckPin = kDefaultHx711Sck;
   _data.calibrationEepromAddress = kDefaultCalibrationAddress;
+  _data.espNowChannel = kDefaultEspNowChannel;
 
 #ifdef ARDUINO
   Preferences preferences;
@@ -76,6 +85,14 @@ bool RuntimeConfig::begin(const char *storageNamespace) {
   _data.hx711DoutPin = preferences.getInt("hx_dout", _data.hx711DoutPin);
   _data.hx711SckPin = preferences.getInt("hx_sck", _data.hx711SckPin);
   _data.calibrationEepromAddress = preferences.getInt("cal_addr", _data.calibrationEepromAddress);
+  _data.espNowChannel = preferences.getUChar("esp_channel", _data.espNowChannel);
+  _data.espNowEncrypted = preferences.getBool("esp_encrypt", _data.espNowEncrypted);
+  if (preferences.getBytesLength("esp_pmk") == _data.espNowPmk.size()) {
+    preferences.getBytes("esp_pmk", _data.espNowPmk.data(), _data.espNowPmk.size());
+  }
+  if (preferences.getBytesLength("esp_lmk") == _data.espNowLmk.size()) {
+    preferences.getBytes("esp_lmk", _data.espNowLmk.data(), _data.espNowLmk.size());
+  }
   preferences.end();
 #endif
 
@@ -84,6 +101,16 @@ bool RuntimeConfig::begin(const char *storageNamespace) {
   if (_data.watchdogLoopIntervalMs == 0) _data.watchdogLoopIntervalMs = kDefaultWatchdogLoopMs;
   if (_data.watchdogTimeoutMs < _data.watchdogLoopIntervalMs * 2) {
     _data.watchdogTimeoutMs = _data.watchdogLoopIntervalMs * 2;
+  }
+  if (_data.espNowChannel == 0 || _data.espNowChannel > 14) {
+    _data.espNowChannel = kDefaultEspNowChannel;
+  }
+  const bool pmkEmpty = std::all_of(
+      _data.espNowPmk.begin(), _data.espNowPmk.end(), [](uint8_t b) { return b == 0; });
+  const bool lmkEmpty = std::all_of(
+      _data.espNowLmk.begin(), _data.espNowLmk.end(), [](uint8_t b) { return b == 0; });
+  if (pmkEmpty || lmkEmpty) {
+    _data.espNowEncrypted = false;
   }
   return true;
 }

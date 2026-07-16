@@ -1,9 +1,11 @@
 #include <application/MasterController.h>
+#include <models/Payloads.h>
+#include <services/Logger.h>
 #include <cstring>
 #include <iostream>
 
 MasterController::MasterController(IEspNowDriver &driver)
-  : _driver(driver), _network(driver, 1), _table(128), _poller(_network, _table), _ota(_network, _table), _diagnostics(_network, _table), _lastPoll(0), _lastWatchdog(0), _watchdogInterval(10000), _nextNodeId(2) {}
+  : _driver(driver), _network(driver, 1), _table(128), _poller(_network, _table), _ota(_network, _table), _diagnostics(_network, _table), _gateway(256), _lastPoll(0), _lastWatchdog(0), _watchdogInterval(10000), _nextNodeId(2) {}
 
 bool MasterController::begin() {
   if (!_network.begin()) return false;
@@ -23,6 +25,9 @@ bool MasterController::begin() {
   _poller.begin();
   _ota.begin();
   _diagnostics.begin();
+  if (!_gateway.begin("gateway")) {
+    Logger::instance().warn("master", "Gateway buffer unavailable.");
+  }
   return true;
 }
 
@@ -86,19 +91,50 @@ void MasterController::handlePacket(const Packet &packet, const NetworkManager::
     Packet timeSync;
     timeSync.type = PacketType::TIME_SYNC;
     timeSync.dst_id = nodeId;
+    const uint64_t nowMs = _network.nowMillis();
+    timeSync.payload = Payloads::encodeTimeSync({nowMs, nowMs});
     _network.send(timeSync, mac);
     return;
   }
 
   if (packet.type == PacketType::SENSOR_DATA) {
+    Payloads::SensorData sample;
+    if (Payloads::decodeSensorData(packet.payload, sample)) {
+      Logger::instance().debug(
+          "master",
+          "Sensor sample node=" + std::to_string(nodeId) +
+              " weight_mg=" + std::to_string(sample.weightMg));
+    }
+    if (!_gateway.enqueuePacket(packet, nodeId, now)) {
+      Logger::instance().warn("master", "Gateway buffer full; sensor sample was not retained.");
+    }
     Packet ack;
     ack.type = PacketType::ACK;
     ack.dst_id = nodeId;
-    ack.payload = {
-      static_cast<uint8_t>((packet.seq >> 24) & 0xFF),
-      static_cast<uint8_t>((packet.seq >> 16) & 0xFF),
-      static_cast<uint8_t>((packet.seq >> 8) & 0xFF),
-      static_cast<uint8_t>(packet.seq & 0xFF)};
+    ack.payload = Payloads::encodeAck(packet.seq);
     _network.send(ack, mac);
+    return;
+  }
+
+  if (packet.type == PacketType::DIAGNOSTIC || packet.type == PacketType::HEARTBEAT) {
+    if (!_gateway.enqueuePacket(packet, nodeId, now)) {
+      Logger::instance().warn("master", "Gateway buffer full; packet was not retained.");
+    }
+    return;
+  }
+
+  if (packet.type == PacketType::ACK) {
+    uint32_t sequence = 0;
+    if (Payloads::decodeAck(packet.payload, sequence)) {
+      _ota.handleAck(nodeId, sequence);
+    }
+    return;
+  }
+
+  if (packet.type == PacketType::NACK) {
+    uint32_t sequence = 0;
+    if (Payloads::decodeAck(packet.payload, sequence)) {
+      _ota.handleNack(nodeId, sequence);
+    }
   }
 }

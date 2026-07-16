@@ -2,7 +2,10 @@
 #define SCALEMANAGER_H
 
 #include <Arduino.h>
+#include <Calibration.h>
 #include <HX711_ADC.h>
+#include <PartCounter.h>
+#include <memory>
 
 class ScaleManager {
 public:
@@ -13,6 +16,7 @@ public:
   float currentWeight();
   float averagePieceWeight() const;
   float estimatedParts();
+  bool ready() const;
 
 private:
   void initializeBluetooth();
@@ -23,8 +27,8 @@ private:
   void printTareStatus();
 
   HX711_ADC _loadCell;
-  class Calibration *_calibration;
-  class PartCounter *_partCounter;
+  std::unique_ptr<Calibration> _calibration;
+  std::unique_ptr<PartCounter> _partCounter;
   Stream *_bluetoothStream;
   unsigned long _lastPrint;
   unsigned long _lastNoDataPrint;
@@ -33,6 +37,7 @@ private:
   unsigned long _lastAutoZero;
   unsigned long _autoZeroStableStart;
   bool _autoZeroPending;
+  bool _sensorReady;
 };
 
 #endif // SCALEMANAGER_H

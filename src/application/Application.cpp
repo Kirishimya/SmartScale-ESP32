@@ -7,6 +7,7 @@
 #include <drivers/EspNowDriver.h>
 #include <services/Logger.h>
 
+#include <algorithm>
 #include <string>
 
 #ifdef ARDUINO
@@ -91,6 +92,18 @@ bool Application::begin() {
     Logger::instance().error("app", "Failed to create ESP-NOW driver.");
     return false;
   }
+  EspNowConfig espNowConfig;
+  espNowConfig.channel = _config.data().espNowChannel;
+  espNowConfig.encrypted = _config.data().espNowEncrypted;
+  std::copy(
+      _config.data().espNowPmk.begin(),
+      _config.data().espNowPmk.end(),
+      espNowConfig.primaryMasterKey);
+  std::copy(
+      _config.data().espNowLmk.begin(),
+      _config.data().espNowLmk.end(),
+      espNowConfig.localMasterKey);
+  _driver->configure(espNowConfig);
 
 #if SMARTSCALE_ROLE_MASTER
   _controller.reset(new MasterController(*_driver));

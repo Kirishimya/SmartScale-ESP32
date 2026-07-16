@@ -1,6 +1,7 @@
 #ifndef RUNTIME_CONFIG_H
 #define RUNTIME_CONFIG_H
 
+#include <array>
 #include <cstdint>
 
 #include <services/Logger.h>
@@ -15,6 +16,10 @@ struct RuntimeConfigData {
   int hx711DoutPin = 6;
   int hx711SckPin = 5;
   int calibrationEepromAddress = 0;
+  uint8_t espNowChannel = 1;
+  bool espNowEncrypted = false;
+  std::array<uint8_t, 16> espNowPmk{};
+  std::array<uint8_t, 16> espNowLmk{};
 };
 
 class RuntimeConfig {
